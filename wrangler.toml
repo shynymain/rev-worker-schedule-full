@@ -1,3 +1,4 @@
 name = "rev-worker-schedule-full"
 main = "worker.js"
-compatibility_date = "2024-05-01"
+compatibility_date = "2025-04-01"
+workers_dev = true
