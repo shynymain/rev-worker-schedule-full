@@ -5,57 +5,20 @@ const headers = {
   "access-control-allow-headers": "content-type"
 };
 
-const PLACES = [
-  ["01", "札幌"],
-  ["02", "函館"],
-  ["03", "福島"],
-  ["04", "新潟"],
-  ["05", "東京"],
-  ["06", "中山"],
-  ["07", "中京"],
-  ["08", "京都"],
-  ["09", "阪神"],
-  ["10", "小倉"]
-];
-
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-function addDays(d, n) {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
-
-function nextWeekend() {
-  const now = new Date();
-  const day = now.getDay();
-  const toSat = day === 6 ? 0 : (6 - day + 7) % 7;
-  const sat = addDays(now, toSat);
-  const sun = addDays(sat, 1);
-  return [sat, sun];
-}
-
-function ymdCompact(d) {
-  return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
-}
-
-function ymdSlash(s) {
-  return `${s.slice(0, 4)}/${s.slice(4, 6)}/${s.slice(6, 8)}`;
+function normalize(v) {
+  return String(v || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function fetchHtml(url) {
   const res = await fetch(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "text/html",
+      "Accept-Language": "ja-JP,ja;q=0.9",
       "Referer": "https://race.netkeiba.com/"
-    },
-    cf: {
-      cacheTtl: 300,
-      cacheEverything: true
     }
   });
 
@@ -68,15 +31,8 @@ async function fetchHtml(url) {
   }
 }
 
-function normalizeText(v) {
-  return String(v || "")
-    .normalize("NFKC")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function stripHtml(v) {
-  return normalizeText(
+  return normalize(
     String(v || "")
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -91,158 +47,71 @@ function stripHtml(v) {
 }
 
 function cleanName(v) {
-  return normalizeText(stripHtml(v))
+  return normalize(stripHtml(v))
     .replace(/[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFa-zA-Z0-9ー・ヴァ-ヶ]/g, "")
     .trim();
 }
 
-function isBrokenName(name) {
-  if (!name) return true;
-  if (name.length < 2) return true;
-  return /[^ぁ-んァ-ン一-龯a-zA-Z0-9ー・ヴァ・]/.test(name) && name.length < 3;
+function pickNumber(row, className, min, max) {
+  const re = new RegExp(
+    `<td[^>]*class=["'][^"']*${className}[^"']*["'][^>]*>\\s*([0-9]+)\\s*<`,
+    "i"
+  );
+  const m = row.match(re);
+  if (!m) return "";
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < min || n > max) return "";
+  return String(n);
 }
 
-function getRaceName(text, fallback) {
+function pickOddsFromRow(row) {
   const patterns = [
-    /([^\s　]+ステークス)/,
-    /([^\s　]+特別)/,
-    /([^\s　]+記念)/,
-    /([^\s　]+カップ)/,
-    /([^\s　]+賞)/
-  ];
-
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m && m[1]) return normalizeText(m[1]);
-  }
-
-  return fallback;
-}
-
-function getSurface(text) {
-  if (/芝/.test(text)) return "芝";
-  if (/ダート|ダ/.test(text)) return "ダート";
-  return "";
-}
-
-function getDistance(text) {
-  const m = text.match(/(?:芝|ダート|ダ)\s*(\d{3,4})m?/);
-  return m ? `${m[1]}m` : "";
-}
-
-function getGrade(text) {
-  if (/G1|Ｇ１|GI/.test(text)) return "G1";
-  if (/G2|Ｇ２|GII/.test(text)) return "G2";
-  if (/G3|Ｇ３|GIII/.test(text)) return "G3";
-  if (/リステッド|Listed|L\b/.test(text)) return "L";
-  if (/オープン|OP/.test(text)) return "OP";
-  if (/3勝/.test(text)) return "3勝";
-  if (/2勝/.test(text)) return "2勝";
-  if (/1勝/.test(text)) return "1勝";
-  if (/未勝利/.test(text)) return "未勝利";
-  if (/新馬/.test(text)) return "新馬";
-  return "";
-}
-
-function getAge(text) {
-  if (/4歳以上/.test(text)) return "4歳以上";
-  if (/3歳以上/.test(text)) return "3歳以上";
-  if (/3歳/.test(text)) return "3歳";
-  if (/2歳/.test(text)) return "2歳";
-  return "";
-}
-
-function getCondition(text) {
-  if (/ハンデ/.test(text)) return "ハンデ";
-  if (/別定/.test(text)) return "別定";
-  if (/定量/.test(text)) return "定量";
-  return "";
-}
-
-function getSex(text) {
-  if (/牝/.test(text)) return "牝馬";
-  return "混合";
-}
-
-function pickOdds(row) {
-  const patterns = [
-    /<td[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+\.[0-9]+)\s*</i,
-    /<span[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+\.[0-9]+)\s*</i,
-    /data-odds=["']([0-9]+\.[0-9]+)["']/i
+    /<td[^>]*class=["'][^"']*(?:Odds|Txt_R|Popular)[^"']*["'][^>]*>\s*([0-9]{1,3}\.[0-9])\s*</i,
+    /<span[^>]*class=["'][^"']*(?:Odds|Txt_R|Popular)[^"']*["'][^>]*>\s*([0-9]{1,3}\.[0-9])\s*</i,
+    /data-odds=["']([0-9]{1,3}\.[0-9])["']/i,
+    /odds[^0-9]{0,20}([0-9]{1,3}\.[0-9])/i
   ];
 
   for (const p of patterns) {
     const m = row.match(p);
     if (!m || !m[1]) continue;
 
-    const v = parseFloat(m[1]);
-
-    if (!Number.isFinite(v)) continue;
-    if (v < 1.1 || v > 500) continue;
-
-    return v.toFixed(1);
+    const v = Number(m[1]);
+    if (Number.isFinite(v) && v >= 1.1 && v <= 500) {
+      return v.toFixed(1);
+    }
   }
 
   return "";
 }
 
-function cleanOdds(horses) {
-  return horses.map(h => {
-    const v = Number(h.odds);
-
-    if (!Number.isFinite(v) || v < 1.1 || v > 500) {
-      h.odds = "";
-      h.popularity = "";
-    }
-
-    return h;
-  });
-}
-
-function detectBrokenOdds(horses) {
-  const valid = horses.filter(h => h.odds && Number.isFinite(Number(h.odds)));
-
-  // オッズが30%未満しか取れてない場合は、人気計算しない
-  if (valid.length < Math.floor(horses.length * 0.3)) return true;
-
+function extractOddsMap(html) {
   const map = {};
-  valid.forEach(h => {
-    map[h.odds] = (map[h.odds] || 0) + 1;
-  });
 
-  const maxSame = Math.max(...Object.values(map));
+  const oddsArea =
+    html.match(/<table[^>]*(?:Shutuba_Table|RaceTable|HorseList)[\s\S]*?<\/table>/i)?.[0] ||
+    html;
 
-  // 同じオッズが半数以上なら、誤取得の可能性あり
-  if (maxSame >= Math.ceil(horses.length / 2)) return true;
+  const rows = oddsArea.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
 
-  return false;
-}
+  for (const row of rows) {
+    const no =
+      pickNumber(row, "Umaban", 1, 18) ||
+      pickNumber(row, "Horse_Num", 1, 18);
 
-function addPopularity(horses) {
-  horses.forEach(h => {
-    h.popularity = "";
-  });
+    if (!no) continue;
 
-  const valid = horses
-    .map(h => ({ h, odds: Number(h.odds) }))
-    .filter(x => Number.isFinite(x.odds) && x.odds > 0)
-    .sort((a, b) => a.odds - b.odds);
+    const odds = pickOddsFromRow(row);
+    if (odds) map[no] = odds;
+  }
 
-  let rank = 1;
-  let prev = null;
-
-  valid.forEach((x, i) => {
-    if (prev !== null && x.odds !== prev) rank = i + 1;
-    x.h.popularity = String(rank);
-    prev = x.odds;
-  });
-
-  return horses;
+  return map;
 }
 
 function parseHorses(html) {
-  const horses = [];
+  const oddsMap = extractOddsMap(html);
   const rows = String(html || "").match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+  const horses = [];
 
   for (const row of rows) {
     const nameMatch =
@@ -252,24 +121,23 @@ function parseHorses(html) {
 
     if (!nameMatch) continue;
 
-    const noMatch =
-      row.match(/<td[^>]*class=["'][^"']*Umaban[^"']*["'][^>]*>\s*([1-9]|1[0-8])\s*</i) ||
-      row.match(/<td[^>]*class=["'][^"']*Horse_Num[^"']*["'][^>]*>\s*([1-9]|1[0-8])\s*</i);
+    const no =
+      pickNumber(row, "Umaban", 1, 18) ||
+      pickNumber(row, "Horse_Num", 1, 18);
 
-    if (!noMatch) continue;
+    if (!no) continue;
 
-    const frameMatch =
-      row.match(/<td[^>]*class=["'][^"']*Waku[^"']*["'][^>]*>\s*([1-8])\s*</i) ||
-      row.match(/<td[^>]*class=["'][^"']*Frame[^"']*["'][^>]*>\s*([1-8])\s*</i);
-
-    const no = String(noMatch[1]);
-    const name = cleanName(nameMatch[1]);
-
-    if (!name || isBrokenName(name)) continue;
     if (horses.some(h => h.no === no)) continue;
 
-    const frame = frameMatch ? String(frameMatch[1]) : String(Math.ceil(Number(no) / 2));
-    const pickedOdds = pickOdds(row);
+    const frame =
+      pickNumber(row, "Waku", 1, 8) ||
+      pickNumber(row, "Frame", 1, 8) ||
+      String(Math.ceil(Number(no) / 2));
+
+    const name = cleanName(nameMatch[1]);
+    if (!name || name.length < 2) continue;
+
+    const odds = oddsMap[no] || pickOddsFromRow(row) || "";
 
     horses.push({
       frame,
@@ -278,90 +146,38 @@ function parseHorses(html) {
       last1: "",
       last2: "",
       last3: "",
-      odds: pickedOdds,
+      odds,
       popularity: ""
     });
   }
 
-  const sorted = horses.sort((a, b) => Number(a.no) - Number(b.no));
-
-  let result = cleanOdds(sorted);
-
-  // 安全装置：オッズが壊れている場合は、オッズは残すが人気計算だけ止める
-  if (!detectBrokenOdds(result)) {
-    result = addPopularity(result);
-  } else {
-    result.forEach(h => {
-      h.popularity = "";
-    });
-  }
-
-  return result;
+  return setPopularityPerfect(horses.sort((a, b) => Number(a.no) - Number(b.no)));
 }
 
-function makeRaceItems(dateObj) {
-  const date = ymdCompact(dateObj);
-  const items = [];
+function setPopularityPerfect(horses) {
+  horses.forEach(h => {
+    h.popularity = "";
+  });
 
-  for (const [code, place] of PLACES) {
-    for (let r = 1; r <= 12; r++) {
-      items.push({
-        raceId: `${date}${code}${pad2(r)}`,
-        date,
-        place,
-        raceNo: r
-      });
+  const valid = horses
+    .map(h => ({ h, odds: Number(h.odds) }))
+    .filter(x => Number.isFinite(x.odds) && x.odds >= 1.1 && x.odds <= 500)
+    .sort((a, b) => a.odds - b.odds);
+
+  if (!valid.length) return horses;
+
+  let rank = 1;
+  let prevOdds = null;
+
+  valid.forEach((x, index) => {
+    if (prevOdds !== null && x.odds !== prevOdds) {
+      rank = index + 1;
     }
-  }
+    x.h.popularity = String(rank);
+    prevOdds = x.odds;
+  });
 
-  return items;
-}
-
-async function parseRace(item) {
-  const url = `https://race.netkeiba.com/race/shutuba.html?race_id=${item.raceId}`;
-  const html = await fetchHtml(url);
-  const text = stripHtml(html);
-  const horses = parseHorses(html);
-
-  if (!horses.length) return null;
-  if (horses.length < 8) return null;
-  if (horses.some(h => isBrokenName(h.name))) return null;
-
-  return {
-    id: `${ymdSlash(item.date)}_${item.place}_${pad2(item.raceNo)}`,
-    race: {
-      date: ymdSlash(item.date),
-      place: item.place,
-      raceNo: String(item.raceNo),
-      raceName: getRaceName(text, `${item.place}${item.raceNo}R`),
-      grade: getGrade(text),
-      condition: getCondition(text),
-      age: getAge(text),
-      sex: getSex(text),
-      surface: getSurface(text),
-      distance: getDistance(text),
-      headcount: String(horses.length)
-    },
-    horses,
-    source: "netkeiba-dom-fixed-odds-balanced",
-    sourceRaceId: item.raceId,
-    sourceUrl: url
-  };
-}
-
-async function getSchedule() {
-  const [sat, sun] = nextWeekend();
-  const items = [...makeRaceItems(sat), ...makeRaceItems(sun)];
-  const races = [];
-
-  for (const item of items) {
-    try {
-      const race = await parseRace(item);
-      if (race) races.push(race);
-    } catch (_) {}
-  }
-
-  return races;
+  return horses;
 }
 
 export default {
@@ -376,20 +192,21 @@ export default {
       return new Response(JSON.stringify({
         ok: true,
         service: "rev-worker-schedule-full",
-        mode: "netkeiba-dom-fixed-odds-balanced",
+        mode: "odds-perfect-popularity-perfect",
         endpoints: ["/api/schedule"]
       }), { headers });
     }
 
     if (url.pathname === "/api/schedule") {
-      const races = await getSchedule();
+      const raceId = url.searchParams.get("raceId") || "202605020101";
+      const html = await fetchHtml(`https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`);
+      const horses = parseHorses(html);
 
       return new Response(JSON.stringify({
         ok: true,
-        count: races.length,
-        generatedAt: new Date().toISOString(),
-        source: "netkeiba-dom-fixed-odds-balanced",
-        races
+        raceId,
+        count: horses.length,
+        horses
       }), { headers });
     }
 
