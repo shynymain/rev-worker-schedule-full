@@ -91,7 +91,7 @@ function stripHtml(html) {
 }
 
 function cleanName(name) {
-  return normalizeText(stripHtml(name))
+  return normalizeText(name)
     .replace(/[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFa-zA-Z0-9ー・ヴァ-ヶ]/g, "")
     .trim();
 }
@@ -163,29 +163,26 @@ function parseHorses(html) {
   const rows = String(html || "").match(/<tr[\s\S]*?<\/tr>/gi) || [];
 
   for (const row of rows) {
-    if (!/HorseName|Umaban|Waku|馬名/.test(row)) continue;
+    const nameMatch =
+      row.match(/<a[^>]*href=["']\/horse\/\d+\/?["'][^>]*>([^<]+)<\/a>/i) ||
+      row.match(/HorseName[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i) ||
+      row.match(/Horse_Name[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i);
 
-    const rowText = stripHtml(row);
+    if (!nameMatch) continue;
 
     const noMatch =
-      row.match(/Umaban[^>]*>\s*([1-9]|1[0-8])\s*</i) ||
-      row.match(/Horse_Num[^>]*>\s*([1-9]|1[0-8])\s*</i) ||
-      rowText.match(/\b([1-9]|1[0-8])\b/);
+      row.match(/class=["'][^"']*Umaban[^"']*["'][^>]*>\s*([1-9]|1[0-8])\s*</i) ||
+      row.match(/class=["'][^"']*Horse_Num[^"']*["'][^>]*>\s*([1-9]|1[0-8])\s*</i);
+
+    if (!noMatch) continue;
 
     const frameMatch =
-      row.match(/Waku[^>]*>\s*([1-8])\s*</i) ||
-      row.match(/Frame[^>]*>\s*([1-8])\s*</i);
-
-    const nameMatch =
-      row.match(/HorseName[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i) ||
-      row.match(/Horse_Name[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i) ||
-      row.match(/\/horse\/\d+[^>]*>([^<]+)<\/a>/i);
+      row.match(/class=["'][^"']*Waku[^"']*["'][^>]*>\s*([1-8])\s*</i) ||
+      row.match(/class=["'][^"']*Frame[^"']*["'][^>]*>\s*([1-8])\s*</i);
 
     const oddsMatch =
-      row.match(/Odds[^>]*>\s*([0-9.]+)\s*</i) ||
-      rowText.match(/\b([1-9]\d{0,2}\.\d)\b/);
-
-    if (!noMatch || !nameMatch) continue;
+      row.match(/class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9.]+)\s*</i) ||
+      row.match(/class=["'][^"']*Txt_C[^"']*["'][^>]*>\s*([0-9.]+)\s*</i);
 
     const no = String(noMatch[1]).trim();
     const name = cleanName(nameMatch[1]);
@@ -251,7 +248,6 @@ async function parseRace(item) {
   const shutubaUrl = `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`;
   const html = await fetchHtml(shutubaUrl);
   const text = stripHtml(html);
-
   const horses = parseHorses(html);
 
   if (!horses.length) return null;
@@ -272,7 +268,7 @@ async function parseRace(item) {
       headcount: String(horses.length)
     },
     horses,
-    source: "netkeiba-auto-sjis-normalized",
+    source: "netkeiba-auto-sjis-tag-parse",
     sourceRaceId: raceId,
     sourceUrl: shutubaUrl
   };
@@ -305,7 +301,7 @@ export default {
       return new Response(JSON.stringify({
         ok: true,
         service: "rev-worker-schedule-full",
-        mode: "netkeiba-auto-sjis-normalized",
+        mode: "netkeiba-auto-sjis-tag-parse",
         endpoints: ["/api/schedule"]
       }), { headers });
     }
@@ -317,7 +313,7 @@ export default {
         ok: true,
         count: races.length,
         generatedAt: new Date().toISOString(),
-        source: "netkeiba-auto-sjis-normalized",
+        source: "netkeiba-auto-sjis-tag-parse",
         races
       }), { headers });
     }
