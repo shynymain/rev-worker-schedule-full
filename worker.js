@@ -1,5 +1,3 @@
-以下を rev-worker-schedule-full の worker.js に全部上書きしてください。
-JavaScript
 const headers = {
   "content-type": "application/json;charset=utf-8",
   "access-control-allow-origin": "*",
