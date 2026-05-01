@@ -42,7 +42,7 @@ function ymdCompact(d) {
 }
 
 function ymdSlashFromCompact(s) {
-  return `${s.slice(0,4)}/${s.slice(4,6)}/${s.slice(6,8)}`;
+  return `${s.slice(0, 4)}/${s.slice(4, 6)}/${s.slice(6, 8)}`;
 }
 
 async function fetchHtml(url) {
@@ -68,18 +68,31 @@ async function fetchHtml(url) {
   }
 }
 
-function stripHtml(html) {
-  return String(html || "")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
+function normalizeText(str) {
+  return String(str || "")
+    .normalize("NFKC")
     .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripHtml(html) {
+  return normalizeText(
+    String(html || "")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&quot;/g, '"')
+      .replace(/&#039;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+  );
+}
+
+function cleanName(name) {
+  return normalizeText(stripHtml(name))
+    .replace(/[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFa-zA-Z0-9ー・ヴァ-ヶ]/g, "")
     .trim();
 }
 
@@ -139,7 +152,7 @@ function getRaceName(text, fallback) {
 
   for (const p of patterns) {
     const m = text.match(p);
-    if (m && m[1]) return m[1];
+    if (m && m[1]) return normalizeText(m[1]);
   }
 
   return fallback;
@@ -175,7 +188,7 @@ function parseHorses(html) {
     if (!noMatch || !nameMatch) continue;
 
     const no = String(noMatch[1]).trim();
-    const name = stripHtml(nameMatch[1]);
+    const name = cleanName(nameMatch[1]);
     const frame = frameMatch ? String(frameMatch[1]) : String(Math.ceil(Number(no) / 2));
 
     if (!name || horses.some(h => h.no === no)) continue;
@@ -259,7 +272,7 @@ async function parseRace(item) {
       headcount: String(horses.length)
     },
     horses,
-    source: "netkeiba-auto-sjis",
+    source: "netkeiba-auto-sjis-normalized",
     sourceRaceId: raceId,
     sourceUrl: shutubaUrl
   };
@@ -292,7 +305,7 @@ export default {
       return new Response(JSON.stringify({
         ok: true,
         service: "rev-worker-schedule-full",
-        mode: "netkeiba-auto-sjis",
+        mode: "netkeiba-auto-sjis-normalized",
         endpoints: ["/api/schedule"]
       }), { headers });
     }
@@ -304,7 +317,7 @@ export default {
         ok: true,
         count: races.length,
         generatedAt: new Date().toISOString(),
-        source: "netkeiba-auto-sjis",
+        source: "netkeiba-auto-sjis-normalized",
         races
       }), { headers });
     }
