@@ -160,19 +160,20 @@ function getSex(text) {
 
 function pickOdds(row) {
   const patterns = [
-    /<td[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i,
-    /<span[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i,
-    /Odds[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i,
-    /<td[^>]*data-odds=["']([0-9]+(?:\.[0-9]+)?)["']/i,
-    /<span[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*<\/span>/i,
+    /<td[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+\.[0-9]+)\s*</i,
+    /<span[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+\.[0-9]+)\s*</i,
+    /data-odds=["']([0-9]+\.[0-9]+)["']/i,
     />([0-9]+\.[0-9]+)<\/td>/i
   ];
 
   for (const p of patterns) {
     const m = row.match(p);
-    if (m && m[1] && !Number.isNaN(Number(m[1]))) {
-      const value = String(m[1]);
-      if (Number(value) > 0) return value;
+    if (!m || !m[1]) continue;
+
+    const v = parseFloat(m[1]);
+
+    if (!Number.isNaN(v) && v >= 1.1 && v <= 999) {
+      return v.toFixed(1);
     }
   }
 
@@ -285,7 +286,7 @@ async function parseRace(item) {
       headcount: String(horses.length)
     },
     horses,
-    source: "netkeiba-dom-fixed-odds-safe",
+    source: "netkeiba-dom-fixed-odds-decimal-safe",
     sourceRaceId: item.raceId,
     sourceUrl: url
   };
@@ -318,7 +319,7 @@ export default {
       return new Response(JSON.stringify({
         ok: true,
         service: "rev-worker-schedule-full",
-        mode: "netkeiba-dom-fixed-odds-safe",
+        mode: "netkeiba-dom-fixed-odds-decimal-safe",
         endpoints: ["/api/schedule"]
       }), { headers });
     }
@@ -330,7 +331,7 @@ export default {
         ok: true,
         count: races.length,
         generatedAt: new Date().toISOString(),
-        source: "netkeiba-dom-fixed-odds-safe",
+        source: "netkeiba-dom-fixed-odds-decimal-safe",
         races
       }), { headers });
     }
