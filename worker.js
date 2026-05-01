@@ -5,36 +5,45 @@ const headers = {
   "access-control-allow-headers": "content-type"
 };
 
-const PLACE_CODES = {
-  "札幌": "01",
-  "函館": "02",
-  "福島": "03",
-  "新潟": "04",
-  "東京": "05",
-  "中山": "06",
-  "中京": "07",
-  "京都": "08",
-  "阪神": "09",
-  "小倉": "10"
-};
+export default {
+  async fetch(request) {
 
-const PLACE_NAMES = Object.fromEntries(
-  Object.entries(PLACE_CODES).map(([k, v]) => [v, k])
-);
+    if (request.method === "OPTIONS") {
+      return new Response(JSON.stringify({ ok: true }), { headers });
+    }
 
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
+    const url = new URL(request.url);
 
-function addDays(d, n) {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
+    // health
+    if (url.pathname === "/api/health") {
+      return new Response(JSON.stringify({
+        ok: true,
+        service: "rev-realdata-schedule-worker",
+        endpoints: ["/api/schedule"]
+      }), { headers });
+    }
 
-function nextWeekend(base = new Date()) {
-  const day = base.getDay();
-  const toSat = day === 6 ? 0 : (6 - day + 7) % 7;
+    // ★ ここ重要
+    if (url.pathname === "/api/schedule") {
+
+      // 仮：まずテスト用（ここが出ればOK）
+      return new Response(JSON.stringify({
+        ok: true,
+        message: "schedule OK",
+        races: []
+      }), { headers });
+
+    }
+
+    // それ以外
+    return new Response(JSON.stringify({
+      ok: false,
+      error: "not found",
+      path: url.pathname
+    }), { status: 404, headers });
+
+  }
+};  const toSat = day === 6 ? 0 : (6 - day + 7) % 7;
   const sat = addDays(base, toSat);
   const sun = addDays(sat, 1);
   return [sat, sun];
