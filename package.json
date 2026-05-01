@@ -1,12 +1,5 @@
 {
   "name": "rev-worker-schedule-full",
   "version": "1.0.0",
-  "type": "module",
-  "private": true,
-  "scripts": {
-    "deploy": "wrangler deploy"
-  },
-  "devDependencies": {
-    "wrangler": "^4.0.0"
-  }
+  "private": true
 }
