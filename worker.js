@@ -1,3 +1,5 @@
+以下を rev-worker-schedule-full の worker.js に全部上書きしてください。
+JavaScript
 const headers = {
   "content-type": "application/json;charset=utf-8",
   "access-control-allow-origin": "*",
@@ -158,6 +160,27 @@ function getSex(text) {
   return "混合";
 }
 
+function pickOdds(row) {
+  const patterns = [
+    /<td[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i,
+    /<span[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i,
+    /Odds[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i,
+    /<td[^>]*data-odds=["']([0-9]+(?:\.[0-9]+)?)["']/i,
+    /<span[^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*<\/span>/i,
+    />([0-9]+\.[0-9]+)<\/td>/i
+  ];
+
+  for (const p of patterns) {
+    const m = row.match(p);
+    if (m && m[1] && !Number.isNaN(Number(m[1]))) {
+      const value = String(m[1]);
+      if (Number(value) > 0) return value;
+    }
+  }
+
+  return "";
+}
+
 function parseHorses(html) {
   const horses = [];
   const rows = String(html || "").match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
@@ -180,13 +203,12 @@ function parseHorses(html) {
       row.match(/<td[^>]*class=["'][^"']*Waku[^"']*["'][^>]*>\s*([1-8])\s*</i) ||
       row.match(/<td[^>]*class=["'][^"']*Frame[^"']*["'][^>]*>\s*([1-8])\s*</i);
 
-    const oddsMatch =
-      row.match(/<td[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i) ||
-      row.match(/<span[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i);
-
     const no = String(noMatch[1]);
     const name = cleanName(nameMatch[1]);
     const frame = frameMatch ? String(frameMatch[1]) : String(Math.ceil(Number(no) / 2));
+
+    const pickedOdds = pickOdds(row);
+    const odds = pickedOdds && !Number.isNaN(Number(pickedOdds)) ? String(pickedOdds) : "";
 
     if (!name || horses.some(h => h.no === no)) continue;
 
@@ -197,7 +219,7 @@ function parseHorses(html) {
       last1: "",
       last2: "",
       last3: "",
-      odds: oddsMatch ? String(oddsMatch[1]) : "",
+      odds,
       popularity: ""
     });
   }
@@ -265,7 +287,7 @@ async function parseRace(item) {
       headcount: String(horses.length)
     },
     horses,
-    source: "netkeiba-dom-fixed",
+    source: "netkeiba-dom-fixed-odds-safe",
     sourceRaceId: item.raceId,
     sourceUrl: url
   };
@@ -298,7 +320,7 @@ export default {
       return new Response(JSON.stringify({
         ok: true,
         service: "rev-worker-schedule-full",
-        mode: "netkeiba-dom-fixed",
+        mode: "netkeiba-dom-fixed-odds-safe",
         endpoints: ["/api/schedule"]
       }), { headers });
     }
@@ -310,7 +332,7 @@ export default {
         ok: true,
         count: races.length,
         generatedAt: new Date().toISOString(),
-        source: "netkeiba-dom-fixed",
+        source: "netkeiba-dom-fixed-odds-safe",
         races
       }), { headers });
     }
