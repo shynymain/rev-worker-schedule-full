@@ -6,16 +6,16 @@ const headers = {
 };
 
 const PLACES = [
-  { code: "01", name: "札幌" },
-  { code: "02", name: "函館" },
-  { code: "03", name: "福島" },
-  { code: "04", name: "新潟" },
-  { code: "05", name: "東京" },
-  { code: "06", name: "中山" },
-  { code: "07", name: "中京" },
-  { code: "08", name: "京都" },
-  { code: "09", name: "阪神" },
-  { code: "10", name: "小倉" }
+  ["01", "札幌"],
+  ["02", "函館"],
+  ["03", "福島"],
+  ["04", "新潟"],
+  ["05", "東京"],
+  ["06", "中山"],
+  ["07", "中京"],
+  ["08", "京都"],
+  ["09", "阪神"],
+  ["10", "小倉"]
 ];
 
 function pad2(n) {
@@ -41,7 +41,7 @@ function ymdCompact(d) {
   return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
 }
 
-function ymdSlashFromCompact(s) {
+function ymdSlash(s) {
   return `${s.slice(0, 4)}/${s.slice(4, 6)}/${s.slice(6, 8)}`;
 }
 
@@ -68,16 +68,16 @@ async function fetchHtml(url) {
   }
 }
 
-function normalizeText(str) {
-  return String(str || "")
+function normalizeText(v) {
+  return String(v || "")
     .normalize("NFKC")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function stripHtml(html) {
+function stripHtml(v) {
   return normalizeText(
-    String(html || "")
+    String(v || "")
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
       .replace(/<[^>]+>/g, " ")
@@ -90,10 +90,27 @@ function stripHtml(html) {
   );
 }
 
-function cleanName(name) {
-  return normalizeText(name)
+function cleanName(v) {
+  return normalizeText(stripHtml(v))
     .replace(/[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFa-zA-Z0-9ー・ヴァ-ヶ]/g, "")
     .trim();
+}
+
+function getRaceName(text, fallback) {
+  const patterns = [
+    /([^\s　]+ステークス)/,
+    /([^\s　]+特別)/,
+    /([^\s　]+記念)/,
+    /([^\s　]+カップ)/,
+    /([^\s　]+賞)/
+  ];
+
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m && m[1]) return normalizeText(m[1]);
+  }
+
+  return fallback;
 }
 
 function getSurface(text) {
@@ -141,26 +158,9 @@ function getSex(text) {
   return "混合";
 }
 
-function getRaceName(text, fallback) {
-  const patterns = [
-    /([^\s　]+ステークス)/,
-    /([^\s　]+特別)/,
-    /([^\s　]+記念)/,
-    /([^\s　]+カップ)/,
-    /([^\s　]+賞)/
-  ];
-
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m && m[1]) return normalizeText(m[1]);
-  }
-
-  return fallback;
-}
-
 function parseHorses(html) {
   const horses = [];
-  const rows = String(html || "").match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  const rows = String(html || "").match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
 
   for (const row of rows) {
     const nameMatch =
@@ -171,20 +171,20 @@ function parseHorses(html) {
     if (!nameMatch) continue;
 
     const noMatch =
-      row.match(/class=["'][^"']*Umaban[^"']*["'][^>]*>\s*([1-9]|1[0-8])\s*</i) ||
-      row.match(/class=["'][^"']*Horse_Num[^"']*["'][^>]*>\s*([1-9]|1[0-8])\s*</i);
+      row.match(/<td[^>]*class=["'][^"']*Umaban[^"']*["'][^>]*>\s*([1-9]|1[0-8])\s*</i) ||
+      row.match(/<td[^>]*class=["'][^"']*Horse_Num[^"']*["'][^>]*>\s*([1-9]|1[0-8])\s*</i);
 
     if (!noMatch) continue;
 
     const frameMatch =
-      row.match(/class=["'][^"']*Waku[^"']*["'][^>]*>\s*([1-8])\s*</i) ||
-      row.match(/class=["'][^"']*Frame[^"']*["'][^>]*>\s*([1-8])\s*</i);
+      row.match(/<td[^>]*class=["'][^"']*Waku[^"']*["'][^>]*>\s*([1-8])\s*</i) ||
+      row.match(/<td[^>]*class=["'][^"']*Frame[^"']*["'][^>]*>\s*([1-8])\s*</i);
 
     const oddsMatch =
-      row.match(/class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9.]+)\s*</i) ||
-      row.match(/class=["'][^"']*Txt_C[^"']*["'][^>]*>\s*([0-9.]+)\s*</i);
+      row.match(/<td[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i) ||
+      row.match(/<span[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)\s*</i);
 
-    const no = String(noMatch[1]).trim();
+    const no = String(noMatch[1]);
     const name = cleanName(nameMatch[1]);
     const frame = frameMatch ? String(frameMatch[1]) : String(Math.ceil(Number(no) / 2));
 
@@ -223,42 +223,39 @@ function addPopularity(horses) {
   return horses;
 }
 
-function makeRaceIds(dateObj) {
-  const ymd = ymdCompact(dateObj);
-  const ids = [];
+function makeRaceItems(dateObj) {
+  const date = ymdCompact(dateObj);
+  const items = [];
 
-  for (const place of PLACES) {
+  for (const [code, place] of PLACES) {
     for (let r = 1; r <= 12; r++) {
-      ids.push({
-        raceId: `${ymd}${place.code}${pad2(r)}`,
-        place
+      items.push({
+        raceId: `${date}${code}${pad2(r)}`,
+        date,
+        place,
+        raceNo: r
       });
     }
   }
 
-  return ids;
+  return items;
 }
 
 async function parseRace(item) {
-  const raceId = item.raceId;
-  const place = item.place;
-  const raceNo = Number(raceId.slice(10, 12));
-  const date = raceId.slice(0, 8);
-
-  const shutubaUrl = `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`;
-  const html = await fetchHtml(shutubaUrl);
+  const url = `https://race.netkeiba.com/race/shutuba.html?race_id=${item.raceId}`;
+  const html = await fetchHtml(url);
   const text = stripHtml(html);
   const horses = parseHorses(html);
 
   if (!horses.length) return null;
 
   return {
-    id: `${ymdSlashFromCompact(date)}_${place.name}_${pad2(raceNo)}`,
+    id: `${ymdSlash(item.date)}_${item.place}_${pad2(item.raceNo)}`,
     race: {
-      date: ymdSlashFromCompact(date),
-      place: place.name,
-      raceNo: String(raceNo),
-      raceName: getRaceName(text, `${place.name}${raceNo}R`),
+      date: ymdSlash(item.date),
+      place: item.place,
+      raceNo: String(item.raceNo),
+      raceName: getRaceName(text, `${item.place}${item.raceNo}R`),
       grade: getGrade(text),
       condition: getCondition(text),
       age: getAge(text),
@@ -268,15 +265,15 @@ async function parseRace(item) {
       headcount: String(horses.length)
     },
     horses,
-    source: "netkeiba-auto-sjis-tag-parse",
-    sourceRaceId: raceId,
-    sourceUrl: shutubaUrl
+    source: "netkeiba-dom-fixed",
+    sourceRaceId: item.raceId,
+    sourceUrl: url
   };
 }
 
 async function getSchedule() {
   const [sat, sun] = nextWeekend();
-  const items = [...makeRaceIds(sat), ...makeRaceIds(sun)];
+  const items = [...makeRaceItems(sat), ...makeRaceItems(sun)];
   const races = [];
 
   for (const item of items) {
@@ -301,7 +298,7 @@ export default {
       return new Response(JSON.stringify({
         ok: true,
         service: "rev-worker-schedule-full",
-        mode: "netkeiba-auto-sjis-tag-parse",
+        mode: "netkeiba-dom-fixed",
         endpoints: ["/api/schedule"]
       }), { headers });
     }
@@ -313,7 +310,7 @@ export default {
         ok: true,
         count: races.length,
         generatedAt: new Date().toISOString(),
-        source: "netkeiba-auto-sjis-tag-parse",
+        source: "netkeiba-dom-fixed",
         races
       }), { headers });
     }
