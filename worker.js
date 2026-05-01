@@ -26,7 +26,7 @@ async function fetchHtml(url) {
 
   try {
     return new TextDecoder("shift_jis").decode(buf);
-  } catch (_) {
+  } catch {
     return new TextDecoder("utf-8").decode(buf);
   }
 }
@@ -46,63 +46,38 @@ function stripHtml(v) {
   );
 }
 
-function cleanName(v) {
-  return normalize(stripHtml(v))
-    .replace(/[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFa-zA-Z0-9ー・ヴァ-ヶ]/g, "")
-    .trim();
-}
-
-function pickNumber(row, className, min, max) {
-  const re = new RegExp(
-    `<td[^>]*class=["'][^"']*${className}[^"']*["'][^>]*>\\s*([0-9]+)\\s*<`,
-    "i"
-  );
-  const m = row.match(re);
-  if (!m) return "";
-  const n = Number(m[1]);
-  if (!Number.isFinite(n) || n < min || n > max) return "";
-  return String(n);
-}
-
-function pickOddsFromRow(row) {
-  const patterns = [
-    /<td[^>]*class=["'][^"']*(?:Odds|Txt_R|Popular)[^"']*["'][^>]*>\s*([0-9]{1,3}\.[0-9])\s*</i,
-    /<span[^>]*class=["'][^"']*(?:Odds|Txt_R|Popular)[^"']*["'][^>]*>\s*([0-9]{1,3}\.[0-9])\s*</i,
-    /data-odds=["']([0-9]{1,3}\.[0-9])["']/i,
-    /odds[^0-9]{0,20}([0-9]{1,3}\.[0-9])/i
-  ];
-
-  for (const p of patterns) {
-    const m = row.match(p);
-    if (!m || !m[1]) continue;
-
-    const v = Number(m[1]);
-    if (Number.isFinite(v) && v >= 1.1 && v <= 500) {
-      return v.toFixed(1);
-    }
-  }
-
-  return "";
-}
-
 function extractOddsMap(html) {
   const map = {};
 
-  const oddsArea =
-    html.match(/<table[^>]*(?:Shutuba_Table|RaceTable|HorseList)[\s\S]*?<\/table>/i)?.[0] ||
-    html;
+  const dataRows =
+    html.match(/data-odds=["'][0-9]+\.[0-9]["'][\s\S]{0,300}?data-horse-num=["'][0-9]+["']/gi) || [];
 
-  const rows = oddsArea.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+  for (const row of dataRows) {
+    const odds = row.match(/data-odds=["']([0-9]+\.[0-9])["']/i)?.[1];
+    const no = row.match(/data-horse-num=["']([0-9]+)["']/i)?.[1];
+    if (odds && no) map[no] = odds;
+  }
+
+  const rows = String(html || "").match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
 
   for (const row of rows) {
     const no =
-      pickNumber(row, "Umaban", 1, 18) ||
-      pickNumber(row, "Horse_Num", 1, 18);
+      row.match(/Umaban[^>]*>\s*([1-9]|1[0-8])\s*</i)?.[1] ||
+      row.match(/Horse_Num[^>]*>\s*([1-9]|1[0-8])\s*</i)?.[1];
 
     if (!no) continue;
 
-    const odds = pickOddsFromRow(row);
-    if (odds) map[no] = odds;
+    const odds =
+      row.match(/Odds[^>]*>\s*([0-9]{1,3}\.[0-9])\s*</i)?.[1] ||
+      row.match(/Popular[^>]*>\s*([0-9]{1,3}\.[0-9])\s*</i)?.[1] ||
+      row.match(/data-odds=["']([0-9]{1,3}\.[0-9])["']/i)?.[1];
+
+    if (odds) {
+      const v = Number(odds);
+      if (Number.isFinite(v) && v >= 1.0 && v <= 500) {
+        map[no] = v.toFixed(1);
+      }
+    }
   }
 
   return map;
@@ -115,69 +90,93 @@ function parseHorses(html) {
 
   for (const row of rows) {
     const nameMatch =
-      row.match(/<a[^>]*href=["']\/horse\/\d+\/?["'][^>]*>([^<]+)<\/a>/i) ||
+      row.match(/<a[^>]*href=["'][^"']*\/horse\/\d+\/?[^"']*["'][^>]*>([^<]+)<\/a>/i) ||
       row.match(/HorseName[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i) ||
       row.match(/Horse_Name[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i);
 
     if (!nameMatch) continue;
 
     const no =
-      pickNumber(row, "Umaban", 1, 18) ||
-      pickNumber(row, "Horse_Num", 1, 18);
+      row.match(/Umaban[^>]*>\s*([1-9]|1[0-8])\s*</i)?.[1] ||
+      row.match(/Horse_Num[^>]*>\s*([1-9]|1[0-8])\s*</i)?.[1];
 
     if (!no) continue;
-
     if (horses.some(h => h.no === no)) continue;
 
     const frame =
-      pickNumber(row, "Waku", 1, 8) ||
-      pickNumber(row, "Frame", 1, 8) ||
+      row.match(/Waku[^>]*>\s*([1-8])\s*</i)?.[1] ||
+      row.match(/Frame[^>]*>\s*([1-8])\s*</i)?.[1] ||
       String(Math.ceil(Number(no) / 2));
-
-    const name = cleanName(nameMatch[1]);
-    if (!name || name.length < 2) continue;
-
-    const odds = oddsMap[no] || pickOddsFromRow(row) || "";
 
     horses.push({
       frame,
       no,
-      name,
+      name: normalize(stripHtml(nameMatch[1])),
       last1: "",
       last2: "",
       last3: "",
-      odds,
+      odds: oddsMap[no] || "",
       popularity: ""
     });
   }
 
-  return setPopularityPerfect(horses.sort((a, b) => Number(a.no) - Number(b.no)));
+  return setPopularity(horses.sort((a, b) => Number(a.no) - Number(b.no)));
 }
 
-function setPopularityPerfect(horses) {
+function setPopularity(horses) {
   horses.forEach(h => {
     h.popularity = "";
   });
 
   const valid = horses
     .map(h => ({ h, odds: Number(h.odds) }))
-    .filter(x => Number.isFinite(x.odds) && x.odds >= 1.1 && x.odds <= 500)
+    .filter(x => Number.isFinite(x.odds) && x.odds > 0)
     .sort((a, b) => a.odds - b.odds);
 
-  if (!valid.length) return horses;
-
   let rank = 1;
-  let prevOdds = null;
+  let prev = null;
 
-  valid.forEach((x, index) => {
-    if (prevOdds !== null && x.odds !== prevOdds) {
-      rank = index + 1;
-    }
+  valid.forEach((x, i) => {
+    if (prev !== null && x.odds !== prev) rank = i + 1;
     x.h.popularity = String(rank);
-    prevOdds = x.odds;
+    prev = x.odds;
   });
 
   return horses;
+}
+
+function pickDebugSnippets(html) {
+  const text = String(html || "");
+  const keys = [
+    "Odds",
+    "odds",
+    "Popular",
+    "Umaban",
+    "Horse_Num",
+    "HorseName",
+    "data-odds",
+    "data-horse-num",
+    "/horse/"
+  ];
+
+  const snippets = {};
+
+  for (const key of keys) {
+    const idx = text.indexOf(key);
+    if (idx >= 0) {
+      snippets[key] = text.slice(Math.max(0, idx - 500), Math.min(text.length, idx + 1200));
+    } else {
+      snippets[key] = "";
+    }
+  }
+
+  const rows = text.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+  const horseRows = rows
+    .filter(r => /\/horse\/\d+/.test(r))
+    .slice(0, 3)
+    .map(r => r.slice(0, 2500));
+
+  return { snippets, horseRows };
 }
 
 export default {
@@ -187,19 +186,39 @@ export default {
     }
 
     const url = new URL(request.url);
+    const raceId = url.searchParams.get("raceId") || "202605020101";
+    const targetUrl = `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`;
 
     if (url.pathname === "/api/health") {
       return new Response(JSON.stringify({
         ok: true,
         service: "rev-worker-schedule-full",
-        mode: "odds-perfect-popularity-perfect",
-        endpoints: ["/api/schedule"]
+        mode: "debug-html-enabled",
+        endpoints: ["/api/schedule", "/api/debug-html?raceId=202605020101"]
+      }), { headers });
+    }
+
+    if (url.pathname === "/api/debug-html") {
+      const html = await fetchHtml(targetUrl);
+      const debug = pickDebugSnippets(html);
+      const oddsMap = extractOddsMap(html);
+      const horses = parseHorses(html);
+
+      return new Response(JSON.stringify({
+        ok: true,
+        raceId,
+        targetUrl,
+        htmlLength: html.length,
+        hasOddsText: /Odds|odds|Popular|data-odds/i.test(html),
+        oddsMap,
+        parsedCount: horses.length,
+        parsedSample: horses.slice(0, 5),
+        debug
       }), { headers });
     }
 
     if (url.pathname === "/api/schedule") {
-      const raceId = url.searchParams.get("raceId") || "202605020101";
-      const html = await fetchHtml(`https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`);
+      const html = await fetchHtml(targetUrl);
       const horses = parseHorses(html);
 
       return new Response(JSON.stringify({
