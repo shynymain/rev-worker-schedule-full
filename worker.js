@@ -96,6 +96,12 @@ function cleanName(v) {
     .trim();
 }
 
+function isBrokenName(name) {
+  if (!name) return true;
+  if (name.length < 2) return true;
+  return /[^ぁ-んァ-ン一-龯a-zA-Z0-9ー・ヴァ・]/.test(name) && name.length < 3;
+}
+
 function getRaceName(text, fallback) {
   const patterns = [
     /([^\s　]+ステークス)/,
@@ -162,8 +168,7 @@ function pickOdds(row) {
   const patterns = [
     /<td[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+\.[0-9]+)\s*</i,
     /<span[^>]*class=["'][^"']*Odds[^"']*["'][^>]*>\s*([0-9]+\.[0-9]+)\s*</i,
-    /data-odds=["']([0-9]+\.[0-9]+)["']/i,
-    />([0-9]+\.[0-9]+)<\/td>/i
+    /data-odds=["']([0-9]+\.[0-9]+)["']/i
   ];
 
   for (const p of patterns) {
@@ -172,12 +177,41 @@ function pickOdds(row) {
 
     const v = parseFloat(m[1]);
 
-    if (!Number.isNaN(v) && v >= 1.1 && v <= 999) {
-      return v.toFixed(1);
-    }
+    if (!Number.isFinite(v)) continue;
+    if (v < 1.1 || v > 500) continue;
+
+    return v.toFixed(1);
   }
 
   return "";
+}
+
+function detectBrokenOdds(horses) {
+  const oddsList = horses.map(h => h.odds).filter(Boolean);
+  if (!oddsList.length) return false;
+
+  const map = {};
+  oddsList.forEach(o => {
+    map[o] = (map[o] || 0) + 1;
+  });
+
+  const maxSame = Math.max(...Object.values(map));
+
+  // 同じオッズが半数以上なら誤取得扱い
+  if (maxSame >= Math.ceil(horses.length / 2)) return true;
+
+  // 1,2,3,4...のような連番誤取得を検知
+  const numeric = oddsList.map(Number).filter(Number.isFinite);
+  if (numeric.length >= 5) {
+    const sorted = [...numeric].sort((a, b) => a - b);
+    let sequential = 0;
+    for (let i = 1; i < sorted.length; i++) {
+      if (Math.abs(sorted[i] - sorted[i - 1] - 1) < 0.001) sequential++;
+    }
+    if (sequential >= 4) return true;
+  }
+
+  return false;
 }
 
 function parseHorses(html) {
@@ -209,7 +243,8 @@ function parseHorses(html) {
     const pickedOdds = pickOdds(row);
     const odds = pickedOdds && !Number.isNaN(Number(pickedOdds)) ? String(pickedOdds) : "";
 
-    if (!name || horses.some(h => h.no === no)) continue;
+    if (!name || isBrokenName(name)) continue;
+    if (horses.some(h => h.no === no)) continue;
 
     horses.push({
       frame,
@@ -223,7 +258,18 @@ function parseHorses(html) {
     });
   }
 
-  return addPopularity(horses.sort((a, b) => Number(a.no) - Number(b.no)));
+  const sorted = horses.sort((a, b) => Number(a.no) - Number(b.no));
+  const withPop = addPopularity(sorted);
+
+  // 安全装置：オッズが壊れている場合はオッズ・人気だけ消す
+  if (detectBrokenOdds(withPop)) {
+    withPop.forEach(h => {
+      h.odds = "";
+      h.popularity = "";
+    });
+  }
+
+  return withPop;
 }
 
 function addPopularity(horses) {
@@ -268,7 +314,12 @@ async function parseRace(item) {
   const text = stripHtml(html);
   const horses = parseHorses(html);
 
+  // 安全装置：頭数が少なすぎるものは捨てる
   if (!horses.length) return null;
+  if (horses.length < 8) return null;
+
+  // 安全装置：名前崩壊が残っていれば捨てる
+  if (horses.some(h => isBrokenName(h.name))) return null;
 
   return {
     id: `${ymdSlash(item.date)}_${item.place}_${pad2(item.raceNo)}`,
@@ -286,7 +337,7 @@ async function parseRace(item) {
       headcount: String(horses.length)
     },
     horses,
-    source: "netkeiba-dom-fixed-odds-decimal-safe",
+    source: "netkeiba-dom-fixed-odds-guarded",
     sourceRaceId: item.raceId,
     sourceUrl: url
   };
@@ -319,7 +370,7 @@ export default {
       return new Response(JSON.stringify({
         ok: true,
         service: "rev-worker-schedule-full",
-        mode: "netkeiba-dom-fixed-odds-decimal-safe",
+        mode: "netkeiba-dom-fixed-odds-guarded",
         endpoints: ["/api/schedule"]
       }), { headers });
     }
@@ -331,7 +382,7 @@ export default {
         ok: true,
         count: races.length,
         generatedAt: new Date().toISOString(),
-        source: "netkeiba-dom-fixed-odds-decimal-safe",
+        source: "netkeiba-dom-fixed-odds-guarded",
         races
       }), { headers });
     }
