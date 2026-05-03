@@ -1,143 +1,55 @@
-const headers = {
-  "content-type": "application/json;charset=utf-8",
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "content-type"
-};
-
-// schedule Worker v5
-// 修正点: id / raceId は必ず12桁固定
-// 例: 20260502010101 -> 202605020101
-
-const BASE_RACE_IDS = [
-  "202605020101", "202605020102", "202605020103", "202605020104", "202605020105",
-  "202605020106", "202605020107", "202605020108", "202605020109", "202605020110"
-];
-
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), { status, headers });
-}
-
-function normalizeRaceId(value = "") {
-  return String(value || "").replace(/\D/g, "").slice(0, 12);
-}
-
-function buildFrame(no) {
-  if (no <= 2) return "1";
-  if (no <= 4) return "2";
-  if (no <= 6) return "3";
-  if (no <= 8) return "4";
-  if (no <= 10) return "5";
-  if (no <= 12) return "6";
-  if (no <= 14) return "7";
-  return "8";
-}
-
-function blankHorses(headcount = 14) {
-  return Array.from({ length: Number(headcount || 14) }, (_, i) => {
-    const no = i + 1;
-    return {
-      frame: buildFrame(no),
-      no: String(no),
-      name: "",
-      last1: "",
-      last2: "",
-      last3: "",
-      odds: "",
-      popularity: ""
-    };
-  });
-}
-
-function buildRace(raceId) {
-  const id = normalizeRaceId(raceId);
-  const yyyy = id.slice(0, 4);
-  const mm = id.slice(4, 6);
-  const dd = id.slice(6, 8);
-  const placeCode = id.slice(8, 10);
-  const raceNo = String(Number(id.slice(10, 12) || "1"));
-
-  const placeMap = {
-    "01": "札幌",
-    "02": "函館",
-    "03": "福島",
-    "04": "新潟",
-    "05": "東京",
-    "06": "中山",
-    "07": "中京",
-    "08": "京都",
-    "09": "阪神",
-    "10": "小倉"
-  };
-
-  const place = placeMap[placeCode] || "札幌";
-  const headcount = 14;
-
-  return {
-    id,
-    raceId: id,
-    race: {
-      date: `${yyyy}/${mm}/${dd}`,
-      place,
-      raceNo,
-      raceName: `${place}${raceNo}R`,
-      grade: "",
-      condition: "",
-      age: "",
-      sex: "",
-      surface: "",
-      distance: "",
-      headcount: String(headcount)
-    },
-    horses: blankHorses(headcount),
-    count: headcount,
-    source: "schedule-full-fixed-v5",
-    sourceRaceId: id,
-    sourceUrl: `https://race.netkeiba.com/race/shutuba.html?race_id=${id}`,
-    oddsUrl: "",
-    oddsCount: 0,
-    oddsStatus: "not_published",
-    status: "entry_ok_odds_not_published",
-    warning: "出馬表は取得済み。オッズは未発表または外部側で非表示のため空で正常扱い。"
-  };
-}
-
+// Rev81 pending-list + result-detail integrated worker
+// Cloudflare Workers single-file deploy. Optional KV binding: RACES.
 export default {
-  async fetch(request) {
-    if (request.method === "OPTIONS") return json({ ok: true });
-
+  async fetch(request, env) {
     const url = new URL(request.url);
-
-    if (url.pathname === "/api/health") {
-      return json({ ok: true, worker: "rev-worker-schedule-full", version: "v5-root", idMode: "12digits" });
+    if (url.pathname === '/api/health') return json({ ok: true, rev: '81-pending-result-detail', time: new Date().toISOString() });
+    if (url.pathname.startsWith('/api/races')) {
+      if (!env.RACES) return json({ ok: false, error: 'KV binding RACES is not configured. localStorage is available.' }, 200);
+      const userKey = request.headers.get('x-user-key') || 'default';
+      const key = `races:${userKey}`;
+      if (request.method === 'GET') return json({ ok: true, races: (await env.RACES.get(key, { type: 'json' })) || [] });
+      if (request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        await env.RACES.put(key, JSON.stringify(body.races || []));
+        return json({ ok: true, saved: (body.races || []).length });
+      }
     }
-
-    if (url.pathname === "/api/schedule") {
-      const raceIdParam = url.searchParams.get("raceId");
-      const ids = raceIdParam ? [normalizeRaceId(raceIdParam)] : BASE_RACE_IDS;
-      const races = ids.filter(Boolean).map(buildRace);
-      return json({ ok: true, count: races.length, races });
-    }
-
-    if (url.pathname === "/api/debug-search") {
-      const raceId = normalizeRaceId(url.searchParams.get("raceId") || BASE_RACE_IDS[0]);
-      return json({
-        ok: true,
-        raceId,
-        oddsCount: 0,
-        oddsStatus: "not_published",
-        oddsMap: {},
-        usedOddsUrl: "",
-        attempts: [
-          { url: `https://race.netkeiba.com/odds/index.html?race_id=${raceId}`, status: 200, encoding: "euc-jp", count: 0 },
-          { url: `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${raceId}&type=1`, status: 200, encoding: "euc-jp", count: 0 },
-          { url: `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${raceId}&type=b1`, status: 200, encoding: "euc-jp", count: 0 },
-          { url: `https://race.netkeiba.com/api/api_get_jra_odds.html?race_id=${raceId}&type=win`, status: 200, encoding: "euc-jp", count: 0 }
-        ],
-        note: "出馬表は取得済み。オッズは未発表または外部側で非表示のため空で正常扱い。"
-      });
-    }
-
-    return json({ ok: false, error: "not found", path: url.pathname }, 404);
+    return new Response(HTML, { headers: { 'content-type': 'text/html; charset=UTF-8', 'cache-control': 'no-store' } });
   }
 };
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), { status, headers: { 'content-type': 'application/json; charset=UTF-8', 'cache-control': 'no-store', 'access-control-allow-origin': '*' } });
+}
+const HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>競馬予想 Rev81</title><style>
+:root{--bg:#f6f7fb;--card:#fff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;--pri:#2563eb;--ok:#059669;--bad:#dc2626;--warn:#d97706;--chip:#eef2ff;--soft:#f9fafb}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px}.wrap{max-width:1080px;margin:0 auto;padding:12px 10px 80px}h1{font-size:20px;margin:8px 0}.lead{font-size:12px;color:var(--muted);line-height:1.5}.tabs{position:sticky;top:0;z-index:5;background:rgba(246,247,251,.96);display:flex;gap:6px;overflow-x:auto;padding:8px 0}.tab{border:1px solid var(--line);background:white;border-radius:999px;padding:9px 12px;white-space:nowrap;font-weight:800;color:#111827}.tab.on{background:var(--pri);color:white}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px;margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,.04)}.raceRow{display:grid;grid-template-columns:60px 1fr auto;gap:10px;align-items:center;border:1px solid var(--line);border-radius:14px;background:#fff;padding:10px;margin:7px 0}.raceNo{font-size:18px;font-weight:900;color:var(--pri)}.status{display:inline-block;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:800;background:#f3f4f6}.status.pending{background:#fef3c7;color:#92400e}.status.done{background:#dcfce7;color:#166534}.status.skip{background:#e5e7eb;color:#374151}label{display:block;font-weight:800;margin:8px 0 4px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:16px;background:white}textarea{min-height:120px;font-family:ui-monospace,Menlo,monospace}.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}button{border:0;border-radius:12px;background:var(--pri);color:white;padding:11px 13px;font-weight:900;font-size:15px}button.sec{background:#374151}button.ok{background:var(--ok)}button.bad{background:var(--bad)}button.warn{background:var(--warn)}button.light{background:#e5e7eb;color:#111827}.small{font-size:12px;color:var(--muted)}.pill{display:inline-block;background:var(--chip);border-radius:999px;padding:3px 8px;margin:2px;font-size:12px;font-weight:800}.hide{display:none}.tableWrap{overflow:auto}table{border-collapse:collapse;width:100%;min-width:900px}th,td{border-bottom:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}th{background:#f3f4f6;position:sticky;top:46px}.mark{font-weight:900;font-size:18px}.m◎{color:#dc2626}.m○{color:#2563eb}.m▲{color:#d97706}.hit{color:var(--ok);font-weight:900}.miss{color:var(--bad);font-weight:900}.mono{font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.summary>div{background:var(--soft);border:1px solid var(--line);border-radius:14px;padding:10px}.toast{position:fixed;left:12px;right:12px;bottom:16px;background:#111827;color:white;border-radius:14px;padding:12px;z-index:99;display:none}.copybox{background:#f9fafb;border:1px dashed var(--line);padding:8px;border-radius:12px;margin-top:8px}.winner{border-left:5px solid var(--pri)}.axisTag{background:#fee2e2;color:#991b1b}.groupTitle{background:#111827;color:#fff;border-radius:12px;padding:8px 10px;margin:14px 0 8px;font-weight:900}.placeTitle{font-weight:900;margin:10px 0 4px;color:#111827}@media(max-width:640px){.grid,.summary{grid-template-columns:1fr}.wrap{padding:8px 8px 80px}table{font-size:13px;min-width:880px}.raceRow{grid-template-columns:52px 1fr}.raceRow button{grid-column:1/-1}button{width:100%}.btns button{flex:1 1 45%}}
+</style></head><body><div class="wrap"><h1>競馬予想 Rev81 統合版</h1><div class="lead">トップに「払い戻し確定前・出馬表入力済みレース」をJRAプログラム風に日付別・開催地別・R順で表示。結果画面は1〜3着の印/枠/馬番/馬名/オッズ/人気/軸表示、的中判定、適用ルール、外れ時の仮説まで表示。</div><div class="tabs" id="tabs"></div>
+<section id="top" class="page card"><h2>トップ：未確定レース一覧</h2><div class="summary" id="topSummary"></div><div class="btns"><button onclick="show('race')">新規レース入力</button><button class="light" onclick="renderTop()">一覧更新</button><button class="sec" onclick="show('save')">保存一覧/バックアップ</button></div><div id="pendingProgram"></div></section>
+<section id="race" class="page card hide"><h2>① レース情報</h2><div class="grid"><div><label>日付</label><input id="date" type="date"></div><div><label>開催地</label><input id="place" placeholder="東京 / 京都 / 新潟"></div><div><label>R</label><input id="raceNo" placeholder="11R"></div><div><label>グレード</label><select id="grade"><option>G1</option><option>G2</option><option>G3</option><option>OP</option><option>Listed</option><option>特別</option><option>2勝</option><option>3勝</option><option>条件</option><option>未勝利</option><option>新馬</option></select></div><div><label>馬場</label><select id="surface"><option>芝</option><option>ダート</option><option>障害</option></select></div><div><label>距離</label><input id="distance" placeholder="芝1600"></div><div><label>条件</label><input id="cond" placeholder="4歳以上 2勝 定量 など"></div><div><label>頭数</label><input id="headcount" placeholder="18"></div><div style="grid-column:1/-1"><label>レース名</label><input id="raceName" placeholder="〇〇ステークス"></div></div><div class="btns"><button onclick="saveCurrent()">保存</button><button class="sec" onclick="newRace()">新規</button><button class="light" onclick="samplePrompts()">ChatGPT読取コメント</button></div><div id="promptOut" class="copybox hide"></div></section>
+<section id="input" class="page card hide"><h2>② 出馬表・オッズ入力</h2><label>出馬表貼付</label><textarea id="entriesText" placeholder="1枠1番 馬名 前走→前2走→前3走"></textarea><div class="btns"><button onclick="parseEntries()">出馬表を反映</button><button class="light" onclick="copyPrompt('entries')">出馬表読取コメントコピー</button></div><label>単勝オッズ貼付</label><textarea id="oddsText" placeholder="1 馬名 12.4"></textarea><div class="btns"><button onclick="parseOdds()">オッズを反映・人気計算</button><button class="light" onclick="copyPrompt('odds')">オッズ読取コメントコピー</button></div><div class="small">単勝人気はオッズから自動計算。同オッズは同人気、次順位は飛ばします。</div></section>
+<section id="marks" class="page card hide"><h2>③ 印・買い目</h2><div class="btns"><button onclick="recalcAll()">印と買い目を再計算</button><button class="warn" onclick="forceBets()">見送りでも仮買い目生成</button></div><div id="entriesTable" class="tableWrap"></div><div id="betBox"></div></section>
+<section id="result" class="page card hide"><h2>④ 結果入力・的中判定</h2><label>結果貼付</label><textarea id="resultText" placeholder="1着 5 馬名\n2着 8 馬名\n3着 12 馬名\n馬連 5-8 1240円\n3連複 5-8-12 6200円"></textarea><div class="btns"><button onclick="parseResult()">結果を反映</button><button class="light" onclick="copyPrompt('result')">結果読取コメントコピー</button></div><div class="grid"><div><label>1着馬番</label><input id="r1"></div><div><label>2着馬番</label><input id="r2"></div><div><label>3着馬番</label><input id="r3"></div><div><label>馬連決まり目</label><input id="umarenCombo" placeholder="5-8"></div><div><label>馬連払戻</label><input id="umarenPay" placeholder="0"></div><div><label>3連複決まり目</label><input id="sanrenCombo" placeholder="5-8-12"></div><div><label>3連複払戻</label><input id="sanrenPay" placeholder="0"></div></div><div class="btns"><button onclick="judgeResult()">的中判定・詳細表示</button></div><div id="resultBox"></div></section>
+<section id="ai" class="page card hide"><h2>⑤ 分析・提案</h2><div class="btns"><button onclick="makeAiProposal()">このレースの分析</button><button onclick="compareRules()">保存済み集計</button></div><div id="aiBox" class="mono"></div></section>
+<section id="save" class="page card hide"><h2>⑥ 保存・検索・バックアップ</h2><div class="grid"><input id="search" placeholder="日付/開催地/レース名/グレードで検索" oninput="renderSaved()"><input id="userKey" placeholder="KV同期キー 任意"></div><div class="btns"><button onclick="saveCurrent()">現在レース保存</button><button class="ok" onclick="exportBackup()">バックアップ出力</button><button class="warn" onclick="importBackupPrompt()">バックアップ復元</button><button class="sec" onclick="cloudSave()">KVへ保存</button><button class="sec" onclick="cloudLoad()">KVから読込</button></div><textarea id="backupText" placeholder="バックアップJSON"></textarea><div id="savedList"></div></section></div><div id="toast" class="toast"></div><script>
+const LS='keiba_rev81_races';let current={id:uid(),entries:[],bets:{umaren:[],sanren:[],axis:null,confidence:'',ruleApplied:'',reason:''},result:{}};const pages=['top','race','input','marks','result','ai','save'];const labels=['トップ','レース','入力','印/買い目','結果','分析','保存'];
+function uid(){return 'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,7)}function q(id){return document.getElementById(id)}function toast(s){q('toast').textContent=s;q('toast').style.display='block';setTimeout(()=>q('toast').style.display='none',2200)}function esc(s){return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function init(){q('date').value=new Date().toISOString().slice(0,10);q('tabs').innerHTML=pages.map((p,i)=>'<button class="tab '+(i==0?'on':'')+'" onclick="show(\''+p+'\')">'+labels[i]+'</button>').join('');renderTop();renderSaved()}function show(p){pages.forEach(x=>q(x).classList.toggle('hide',x!==p));[...document.querySelectorAll('.tab')].forEach((b,i)=>b.classList.toggle('on',pages[i]===p));if(p==='top')renderTop();if(p==='marks')renderMarks();if(p==='save')renderSaved();if(p==='result')restoreResultInputs()}
+function loadRaces(){try{return JSON.parse(localStorage.getItem(LS)||'[]')}catch(e){return []}}function storeRaces(a){localStorage.setItem(LS,JSON.stringify(a))}function getMeta(){return {date:q('date').value,place:q('place').value,raceNo:q('raceNo').value,grade:q('grade').value,surface:q('surface').value,distance:q('distance').value,cond:q('cond').value,headcount:q('headcount').value,raceName:q('raceName').value}}function setMeta(m={}){['date','place','raceNo','grade','surface','distance','cond','headcount','raceName'].forEach(k=>{if(q(k))q(k).value=m[k]||''})}
+function hasEntries(r){return (r.entries||[]).length>0}function hasPayout(r){return !!(r.result&&(r.result.umarenPay||r.result.sanrenPay||r.result.umarenCombo||r.result.sanrenCombo))}function raceNum(v){const n=parseInt(String(v||'').replace(/\D/g,''));return Number.isFinite(n)?n:999}
+function renderTop(){const all=loadRaces();const pending=all.filter(r=>hasEntries(r)&&!hasPayout(r)).sort((a,b)=>(a.meta?.date||'').localeCompare(b.meta?.date||'')||(a.meta?.place||'').localeCompare(b.meta?.place||'')||raceNum(a.meta?.raceNo)-raceNum(b.meta?.raceNo));const done=all.filter(hasPayout).length;q('topSummary').innerHTML='<div><b>'+all.length+'</b><br><span class="small">保存総数</span></div><div><b>'+pending.length+'</b><br><span class="small">払戻前・出馬表あり</span></div><div><b>'+done+'</b><br><span class="small">結果/払戻あり</span></div><div><b>'+all.filter(r=>!hasEntries(r)).length+'</b><br><span class="small">出馬表未入力</span></div>';if(!pending.length){q('pendingProgram').innerHTML='<div class="card">払い戻し確定前で出馬表入力済みのレースはありません。</div>';return}let html='',curDate='',curPlace='';pending.forEach(r=>{const m=r.meta||{};if(m.date!==curDate){curDate=m.date;curPlace='';html+='<div class="groupTitle">'+esc(curDate||'日付未設定')+'</div>'}if(m.place!==curPlace){curPlace=m.place;html+='<div class="placeTitle">'+esc(curPlace||'開催地未設定')+'</div>'}const bet=(r.bets?.umaren||[]).length?'買い目あり':'買い目未作成';html+='<div class="raceRow" onclick="openRace(\''+r.id+'\',\'marks\')"><div class="raceNo">'+esc(m.raceNo||'R')+'</div><div><b>'+esc(m.raceName||'レース名未設定')+'</b><div class="small">'+esc([m.grade,m.surface,m.distance,m.cond].filter(Boolean).join(' / '))+'</div><span class="status pending">払戻前</span> <span class="status">出馬表 '+(r.entries||[]).length+'頭</span> <span class="status">'+bet+'</span></div><button onclick="event.stopPropagation();openRace(\''+r.id+'\',\'marks\')">開く</button></div>'});q('pendingProgram').innerHTML=html}
+function saveCurrent(){current.meta=getMeta();current.updatedAt=new Date().toISOString();let a=loadRaces();let i=a.findIndex(x=>x.id===current.id);if(i>=0)a[i]=current;else a.unshift(current);storeRaces(a);renderTop();renderSaved();toast('保存しました')}function newRace(){current={id:uid(),entries:[],bets:{umaren:[],sanren:[],axis:null,confidence:'',ruleApplied:'',reason:''},result:{}};setMeta({date:new Date().toISOString().slice(0,10),grade:'G1',surface:'芝'});['entriesText','oddsText','resultText','r1','r2','r3','umarenCombo','umarenPay','sanrenCombo','sanrenPay'].forEach(id=>q(id).value='');renderMarks();q('resultBox').innerHTML='';toast('新規レース')}function openRace(id,page='race'){const x=loadRaces().find(r=>r.id===id);if(!x)return;current=x;setMeta(x.meta);renderMarks();restoreResultInputs();show(page);toast('読み込みました')}
+function parseEntries(){const rows=[];for(const line of q('entriesText').value.split(/\n+/)){const s=line.trim();if(!s)continue;let m=s.match(/(\d+)\s*枠\s*(\d+)\s*番\s+(.+?)\s+([0-9中止除外取消?]+)\s*[→>－\-]\s*([0-9中止除外取消?]+)\s*[→>－\-]\s*([0-9中止除外取消?]+)/);if(!m)m=s.match(/^(\d+)\s+(.+?)\s+([0-9中止除外取消?]+)\s*[→>－\-]\s*([0-9中止除外取消?]+)\s*[→>－\-]\s*([0-9中止除外取消?]+)/);if(m){if(m.length===7)rows.push({frame:+m[1],num:+m[2],name:m[3].trim(),runs:[m[4],m[5],m[6]]});else rows.push({frame:null,num:+m[1],name:m[2].trim(),runs:[m[3],m[4],m[5]]})}}current.entries=mergeByNum(current.entries,rows);recalcAll();saveCurrent();toast(rows.length+'頭を反映')}
+function parseOdds(){const odds=[];for(const line of q('oddsText').value.split(/\n+/)){let m=line.trim().match(/^(\d+)\s+(.+?)\s+([0-9]+(?:\.[0-9]+)?)/);if(m)odds.push({num:+m[1],name:m[2].trim(),odds:+m[3]})}current.entries=mergeByNum(current.entries,odds);calcPopularity();recalcAll();saveCurrent();toast(odds.length+'頭のオッズ反映')}function mergeByNum(base,rows){const map=new Map((base||[]).map(x=>[x.num,x]));rows.forEach(r=>map.set(r.num,{...(map.get(r.num)||{}),...r}));return [...map.values()].sort((a,b)=>a.num-b.num)}function calcPopularity(){const arr=(current.entries||[]).filter(e=>Number.isFinite(e.odds)).sort((a,b)=>a.odds-b.odds);let rank=1,prev=null;arr.forEach((e,i)=>{if(prev!==null&&e.odds!==prev)rank=i+1;e.pop=rank;prev=e.odds})}
+function ld(v){if(!v)return null;if(/[中除取]/.test(v))return 'X';let n=parseInt(String(v).replace(/\D/g,''));if(!Number.isFinite(n))return null;return n%10===0?10:n%10}function markEntry(e){const d=(e.runs||[]).map(ld);if(d.length<3||d.includes('X')||d.includes(null))return {mark:'',rule:'無印：前2走のみ/中止・除外・取消/不明'};const set=new Set(d),seq=d.join('-'),sum=d.reduce((a,b)=>a+b,0)%10;const has159=[1,9,5].every(x=>set.has(x)),has156=[1,5,6].every(x=>set.has(x));const seqs=['1-4-9','1-4-6','1-8-5','9-1-4','8-1-4','6-1-4','6-4-1','9-4-1','4-1-9','4-1-6'];if(set.size===1)return {mark:'◎',rule:'◎：前3走下1桁が同一'};if(has159||has156)return {mark:'◎',rule:'◎：1・5・9系/1・5・6系'};if(seqs.includes(seq))return {mark:'◎',rule:'◎：指定並び'};if(sum===5)return {mark:'○',rule:'○：前3走合計下1桁5'};if(sum===9)return {mark:'▲',rule:'▲：前3走合計下1桁9'};return {mark:'',rule:'該当なし'}}function recalcAll(){(current.entries||[]).forEach(e=>Object.assign(e,markEntry(e)));calcPopularity();makeBets();renderMarks()}
+function neighbors(n){return n===1?[2]:[n-1,n+1]}function score(e){let s=0;if(e.mark==='◎')s+=55;if(e.mark==='○')s+=35;if(e.mark==='▲')s+=25;if(e.neighborOf)s+=30;if((e.pop||99)<=5)s+=20;else if((e.pop||99)<=10)s+=8;return s}function dedupComb(a){const seen=new Set(),out=[];a.forEach(c=>{const k=c.join('-');if(!seen.has(k)){seen.add(k);out.push(c)}});return out}
+function makeBets(){const es=current.entries||[],marked=es.filter(e=>e.mark);if(marked.length<=1){current.bets={umaren:[],sanren:[],axis:null,confidence:'見送り',ruleApplied:'印1頭以下除外',reason:'◎○▲が1頭以下のためレース除外。'};return}let axes=[],hon=es.filter(e=>e.mark==='◎').sort((a,b)=>(a.pop||99)-(b.pop||99));if(hon.length)axes.push(...hon);hon.forEach(h=>neighbors(h.num).forEach(n=>{const e=es.find(x=>x.num===n);if(e)axes.push({...e,neighborOf:h.num})}));axes.push(...es.filter(e=>e.mark==='○'),...es.filter(e=>e.mark==='▲'));const uniq=[];axes.forEach(e=>{if(!uniq.find(x=>x.num===e.num))uniq.push(e)});const cand=uniq.filter(e=>(e.pop||99)<=10).sort((a,b)=>(score(b)-score(a))||((a.pop||99)-(b.pop||99)));const top=cand.slice(0,6),axis=top[0]||null;const pairs=[];for(let i=0;i<top.length;i++)for(let j=i+1;j<top.length;j++)pairs.push([top[i].num,top[j].num].sort((a,b)=>a-b));const limit=axis&&score(axis)>=80?3:5;const triples=[];for(let i=0;i<top.length;i++)for(let j=i+1;j<top.length;j++)for(let k=j+1;k<top.length;k++)triples.push([top[i].num,top[j].num,top[k].num].sort((a,b)=>a-b));current.bets={axis:axis?axis.num:null,umaren:dedupComb(pairs).slice(0,limit),sanren:dedupComb(triples).slice(0,limit===3?5:6),confidence:limit===3?'高〜中':'中〜低',ruleApplied:'現行ルール：◎優先＋◎隣＋○▲＋5系/中位人気補正',reason:'◎は発生源、軸は5系接続・◎隣・中位人気を優先。馬連3点基準、弱い時は最大5点。3連複は5〜6点。'}}function forceBets(){if(!current.entries.length)return toast('出馬表がありません');let es=[...current.entries].sort((a,b)=>(a.pop||99)-(b.pop||99)).slice(0,6);current.bets.axis=es[0]?.num||null;current.bets.umaren=dedupComb(es.flatMap((x,i)=>es.slice(i+1).map(y=>[x.num,y.num].sort((a,b)=>a-b)))).slice(0,5);current.bets.sanren=dedupComb(es.flatMap((x,i)=>es.slice(i+1).flatMap((y,j)=>es.slice(i+j+2).map(z=>[x.num,y.num,z.num].sort((a,b)=>a-b))))).slice(0,6);current.bets.confidence='低';current.bets.ruleApplied='仮生成：印不足時の人気順補完';current.bets.reason='見送りでも買い目確認用に生成。集計対象にするかは結果保存時の判断。';renderMarks();saveCurrent()}
+function renderMarks(){renderEntries();renderBets()}function renderEntries(){const es=current.entries||[];q('entriesTable').innerHTML='<table><tr><th>印</th><th>枠</th><th>馬番</th><th>馬名</th><th>前3走</th><th>単勝オッズ</th><th>人気</th><th>軸</th><th>適用/判定ルール</th></tr>'+es.map(e=>'<tr><td class="mark m'+(e.mark||'')+'">'+(e.mark||'無')+'</td><td>'+(e.frame||'')+'</td><td>'+e.num+'</td><td>'+esc(e.name||'')+'</td><td>'+((e.runs||[]).join('→'))+'</td><td>'+(e.odds||'')+'</td><td>'+(e.pop?e.pop+'人気':'')+'</td><td>'+(current.bets?.axis===e.num?'<span class="pill axisTag">軸</span>':'')+'</td><td>'+esc(e.rule||'')+'</td></tr>').join('')+'</table>'}function renderBets(){const b=current.bets||{};q('betBox').innerHTML='<div class="card"><h3>買い目</h3><p><b>適用予想ルール：</b>'+esc(b.ruleApplied||'')+'</p><p><b>軸：</b>'+(b.axis?b.axis+'番':'なし')+' / <b>自信度：</b>'+esc(b.confidence||'')+'</p><p>'+esc(b.reason||'')+'</p><div><b>馬連：</b> '+(b.umaren||[]).map(x=>'<span class="pill">'+x.join('-')+'</span>').join('')+'</div><div><b>3連複：</b> '+(b.sanren||[]).map(x=>'<span class="pill">'+x.join('-')+'</span>').join('')+'</div></div>'}
+function parseResult(){const t=q('resultText').value,nums=[];(t.match(/(?:1着|２着|2着|３着|3着)\s*(\d+)/g)||[]).forEach(x=>{let m=x.match(/(\d+)$/);if(m)nums.push(+m[1])});if(nums[0])q('r1').value=nums[0];if(nums[1])q('r2').value=nums[1];if(nums[2])q('r3').value=nums[2];let uc=t.match(/馬連\s*([0-9]+[-ー][0-9]+)/),sc=t.match(/3連複\s*([0-9]+[-ー][0-9]+[-ー][0-9]+)/),u=t.match(/馬連[^\n]*?([0-9,]+)\s*円/),s=t.match(/3連複[^\n]*?([0-9,]+)\s*円/);if(uc)q('umarenCombo').value=uc[1].replace(/ー/g,'-');if(sc)q('sanrenCombo').value=sc[1].replace(/ー/g,'-');if(u)q('umarenPay').value=u[1].replace(/,/g,'');if(s)q('sanrenPay').value=s[1].replace(/,/g,'');judgeResult()}function restoreResultInputs(){const r=current.result||{};q('r1').value=r.r1||'';q('r2').value=r.r2||'';q('r3').value=r.r3||'';q('umarenCombo').value=r.umarenCombo||'';q('umarenPay').value=r.umarenPay||'';q('sanrenCombo').value=r.sanrenCombo||'';q('sanrenPay').value=r.sanrenPay||'';if(r.r1)renderResultBox()}
+function normalizeCombo(s){return String(s||'').split(/[-ー]/).map(x=>+x).filter(Boolean).sort((a,b)=>a-b).join('-')}function altHint(winners){const b=current.bets||{},es=current.entries||[];const winNums=winners.map(x=>x?.num).filter(Boolean);const markedWin=winners.filter(e=>e&&e.mark).map(e=>e.num);let hints=[];if(b.axis&&!winNums.includes(b.axis))hints.push('軸が3着内に入っていないため、軸選定を「'+winNums.join('・')+'番」側に寄せる必要がありました。');if(markedWin.length)hints.push('的中側の印馬：'+markedWin.join('・')+'番。印本体/印隣を相手ではなく軸候補に上げるルールなら拾えた可能性があります。');const five=winNums.filter(n=>[5,14,15].includes(n)||String(n).endsWith('5'));if(five.length)hints.push('5系絡み：'+five.join('・')+'番。5系収束を強く見る補正なら候補に残せました。');if(!hints.length)hints.push('今回の1〜3着は現行の◎/○/▲・5系接続から薄く、見送り判断が妥当寄りです。');return hints.join('\n')}
+function judgeResult(){const r=[+q('r1').value,+q('r2').value,+q('r3').value].filter(Boolean);const autoU=r.slice(0,2).sort((a,b)=>a-b).join('-'),autoS=r.slice(0,3).sort((a,b)=>a-b).join('-');const ucombo=normalizeCombo(q('umarenCombo').value)||autoU,scombo=normalizeCombo(q('sanrenCombo').value)||autoS;const upay=+String(q('umarenPay').value||0).replace(/,/g,''),spay=+String(q('sanrenPay').value||0).replace(/,/g,'');const b=current.bets||{umaren:[],sanren:[]};const uh=(b.umaren||[]).some(x=>x.join('-')===ucombo),sh=(b.sanren||[]).some(x=>x.join('-')===scombo);const axisIn=b.axis?r.includes(b.axis):false;const cost=(b.umaren||[]).length*100+(b.sanren||[]).length*100,ret=(uh?upay:0)+(sh?spay:0);current.result={r1:r[0],r2:r[1],r3:r[2],umarenCombo:ucombo,umarenPay:upay,sanrenCombo:scombo,sanrenPay:spay,umarenHit:uh,sanrenHit:sh,axisIn,cost,ret,roi:cost?Math.round(ret/cost*100):0,ruleApplied:b.ruleApplied||''};renderResultBox();saveCurrent();renderTop()}
+function renderResultBox(){const r=current.result||{},b=current.bets||{},w=[r.r1,r.r2,r.r3].map(n=>(current.entries||[]).find(e=>e.num===n));let rows=w.map((e,i)=>e?'<div class="card winner"><h3>'+(i+1)+'着</h3><p><span class="mark m'+(e.mark||'')+'">'+(e.mark||'無')+'</span> 枠 '+(e.frame||'')+' / 馬番 <b>'+e.num+'</b> / 馬名 <b>'+esc(e.name||'')+'</b></p><p>単勝オッズ：'+(e.odds||'')+' / 人気：'+(e.pop?e.pop+'人気':'')+' '+(b.axis===e.num?'<span class="pill axisTag">軸</span>':'')+'</p><p class="small">'+esc(e.rule||'')+'</p></div>':'').join('');q('resultBox').innerHTML='<div class="card"><h3>的中判定</h3><p><b>適用予想ルール：</b>'+esc(r.ruleApplied||b.ruleApplied||'')+'</p><p>軸的中（3着内）：<span class="'+(r.axisIn?'hit':'miss')+'">'+(r.axisIn?'的中':'不的中')+'</span> / 軸 '+(b.axis||'なし')+'番</p><p>馬連：<span class="'+(r.umarenHit?'hit':'miss')+'">'+(r.umarenHit?'的中':'不的中')+'</span> 決まり目 '+esc(r.umarenCombo||'')+' / 払戻表示 '+(r.umarenPay||0)+'円</p><p>3連複：<span class="'+(r.sanrenHit?'hit':'miss')+'">'+(r.sanrenHit?'的中':'不的中')+'</span> 決まり目 '+esc(r.sanrenCombo||'')+' / 払戻表示 '+(r.sanrenPay||0)+'円</p><p>投資 '+(r.cost||0)+'円 / 回収 '+(r.ret||0)+'円 / 回収率 <b>'+(r.roi||0)+'%</b></p></div>'+rows+'<div class="card"><h3>外れ時の予想ルール仮説</h3><div class="mono">'+esc((r.umarenHit||r.sanrenHit)?'的中あり。現行ルールで拾えています。点数削減候補は軸固定と5系接続の強弱確認です。':altHint(w))+'</div></div>'}
+function makeAiProposal(){const es=current.entries||[],b=current.bets||{};let lines=['このレースの分析','適用ルール: '+(b.ruleApplied||''),'軸: '+(b.axis||'なし')+'番','◎ '+es.filter(e=>e.mark==='◎').length+'頭 / ○ '+es.filter(e=>e.mark==='○').length+'頭 / ▲ '+es.filter(e=>e.mark==='▲').length+'頭'];if(b.confidence==='見送り')lines.push('見送り理由: '+b.reason);else lines.push('勝負候補。馬連 '+(b.umaren||[]).length+'点、3連複 '+(b.sanren||[]).length+'点。');q('aiBox').textContent=lines.join('\n')}function compareRules(){const a=loadRaces().filter(x=>x.result&&x.result.cost);let cost=0,ret=0,uh=0,sh=0,axis=0;a.forEach(x=>{cost+=x.result.cost||0;ret+=x.result.ret||0;if(x.result.umarenHit)uh++;if(x.result.sanrenHit)sh++;if(x.result.axisIn)axis++});q('aiBox').textContent='保存済み集計\n対象: '+a.length+'R\n投資: '+cost+'円\n回収: '+ret+'円\n回収率: '+(cost?Math.round(ret/cost*100):0)+'%\n軸3着内: '+axis+'R\n馬連的中: '+uh+'R\n3連複的中: '+sh+'R'}
+function renderSaved(){const s=(q('search')?.value||'').toLowerCase();const a=loadRaces().filter(x=>JSON.stringify(x.meta||{}).toLowerCase().includes(s));q('savedList').innerHTML='<div class="small">保存 '+a.length+'件</div>'+a.map(x=>{const m=x.meta||{},st=hasPayout(x)?'done':(hasEntries(x)?'pending':'skip');const label=st==='done'?'結果あり':st==='pending'?'払戻前':'出馬表未入力';return '<div class="card"><b>'+esc([m.date,m.place,m.raceNo,m.raceName].filter(Boolean).join(' '))+'</b><div class="small">'+esc([m.grade,m.surface,m.distance,m.cond].filter(Boolean).join(' / '))+'</div><span class="status '+st+'">'+label+'</span><div class="btns"><button class="light" onclick="openRace(\''+x.id+'\',\'marks\')">開く</button><button class="bad" onclick="delRace(\''+x.id+'\')">削除</button></div></div>'}).join('')}function delRace(id){if(!confirm('削除しますか？'))return;storeRaces(loadRaces().filter(x=>x.id!==id));renderSaved();renderTop()}
+function exportBackup(){q('backupText').value=JSON.stringify(loadRaces(),null,2);toast('バックアップJSONを出力しました')}function importBackupPrompt(){try{const a=JSON.parse(q('backupText').value);if(!Array.isArray(a))throw Error();storeRaces(a);renderSaved();renderTop();toast('復元しました')}catch(e){toast('JSON形式が不正です')}}async function cloudSave(){try{const res=await fetch('/api/races',{method:'POST',headers:{'content-type':'application/json','x-user-key':q('userKey').value||'default'},body:JSON.stringify({races:loadRaces()})});const j=await res.json();toast(j.ok?'KV保存しました':'KV未設定です')}catch(e){toast('KV保存エラー')}}async function cloudLoad(){try{const res=await fetch('/api/races',{headers:{'x-user-key':q('userKey').value||'default'}});const j=await res.json();if(j.ok){storeRaces(j.races||[]);renderSaved();renderTop();toast('KVから読込しました')}else toast('KV未設定です')}catch(e){toast('KV読込エラー')}}
+function copyPrompt(type){const p={entries:'添付した競馬画像から「出馬表の馬名、前走、前2走、前3走着順」を読み取り、下記形式だけで返してください。推測が混ざる場合は?を付けてください。説明文は不要です。\n形式：\n1枠1番 馬名 前走→前2走→前3走\n2枠3番 馬名 4→8→1\n全頭分を馬番順。着順は数字のみ。中止/除外/取消は中止と書く。',odds:'添付した競馬画像から「単勝オッズ」を読み取り、下記形式だけで返してください。説明文は不要です。\n形式：\n1 馬名 12.4\n2 馬名 8.6\n全頭分を馬番順。人気は不要。',result:'添付した競馬画像から「レース結果と払戻」を読み取り、下記形式だけで返してください。説明文は不要です。\n形式：\n1着 馬番 馬名\n2着 馬番 馬名\n3着 馬番 馬名\n馬連 馬番-馬番 払戻円\n3連複 馬番-馬番-馬番 払戻円'}[type];navigator.clipboard?.writeText(p);toast('コメントをコピーしました')}function samplePrompts(){q('promptOut').classList.remove('hide');q('promptOut').innerHTML='<b>ChatGPT貼付用コメント</b><br><button class="light" onclick="copyPrompt(\'entries\')">出馬表</button> <button class="light" onclick="copyPrompt(\'odds\')">単勝オッズ</button> <button class="light" onclick="copyPrompt(\'result\')">結果</button>'}
+init();</script></body></html>`;
